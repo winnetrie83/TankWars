@@ -1,0 +1,18 @@
+# Build bestanden
+/build/
+/build-*/
+
+# Qt Creator instellingen
+/.qtcreator/
+*.user
+*.user.*
+
+# CMake gegenereerde bestanden
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+
+# Tijdelijke bestanden
+*.tmp
+*.log
