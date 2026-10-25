@@ -1,0 +1,78 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"jsonFile" : "directory-.-Debug-d0094a50bb2071803777.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.16"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2
+					]
+				}
+			],
+			"name" : "Debug",
+			"projects" : 
+			[
+				{
+					"directoryIndexes" : 
+					[
+						0
+					],
+					"name" : "TankWars",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "TankWars::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-TankWars-Debug-09aa067d075eac6de110.json",
+					"name" : "TankWars",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "TankWars_autogen::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-TankWars_autogen-Debug-d9663ef48c81808894b2.json",
+					"name" : "TankWars_autogen",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "TankWars_autogen_timestamp_deps::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-TankWars_autogen_timestamp_deps-Debug-67cb2ad132d6c0595a1a.json",
+					"name" : "TankWars_autogen_timestamp_deps",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "C:/Gamedevelopment/CPP/TankWars_Qt/build/Desktop_Qt_6_12_0_MinGW_64_bit_Debug",
+		"source" : "C:/Gamedevelopment/CPP/TankWars_Qt"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 7
+	}
+}
