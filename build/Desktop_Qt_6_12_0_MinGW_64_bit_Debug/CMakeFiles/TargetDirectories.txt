@@ -1,5 +1,0 @@
-C:/Gamedevelopment/CPP/TankWars_Qt/build/Desktop_Qt_6_12_0_MinGW_64_bit_Debug/CMakeFiles/TankWars.dir
-C:/Gamedevelopment/CPP/TankWars_Qt/build/Desktop_Qt_6_12_0_MinGW_64_bit_Debug/CMakeFiles/edit_cache.dir
-C:/Gamedevelopment/CPP/TankWars_Qt/build/Desktop_Qt_6_12_0_MinGW_64_bit_Debug/CMakeFiles/rebuild_cache.dir
-C:/Gamedevelopment/CPP/TankWars_Qt/build/Desktop_Qt_6_12_0_MinGW_64_bit_Debug/CMakeFiles/TankWars_autogen_timestamp_deps.dir
-C:/Gamedevelopment/CPP/TankWars_Qt/build/Desktop_Qt_6_12_0_MinGW_64_bit_Debug/CMakeFiles/TankWars_autogen.dir

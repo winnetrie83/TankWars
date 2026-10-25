@@ -1,4 +1,0 @@
-# Hashes of file build rules.
-ad0fc4af0aaef66968e2994caf8661e3 .qt/rcc/qrc_tankwars_audio.cpp
-d0b11ca919cd6f197ef9f97de7b27991 CMakeFiles/TankWars_autogen
-9c0bfcca9f8d6f20b4c0398545a6733d TankWars_autogen/timestamp

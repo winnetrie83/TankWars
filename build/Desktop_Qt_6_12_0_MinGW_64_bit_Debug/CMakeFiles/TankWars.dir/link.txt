@@ -1,3 +1,0 @@
-C:\Qt\Tools\CMake_64\bin\cmake.exe -E rm -f CMakeFiles\TankWars.dir/objects.a
-C:\Qt\Tools\mingw1310_64\bin\ar.exe qc CMakeFiles\TankWars.dir/objects.a @CMakeFiles\TankWars.dir\objects1.rsp
-C:\Qt\Tools\mingw1310_64\bin\g++.exe -g -mwindows -Wl,--whole-archive CMakeFiles\TankWars.dir/objects.a -Wl,--no-whole-archive -o TankWars.exe -Wl,--out-implib,libTankWars.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles\TankWars.dir\linkLibs.rsp
