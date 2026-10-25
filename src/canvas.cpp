@@ -9,6 +9,7 @@
 #include <QPainter>
 #include <QTimer>
 #include <QPainterPath>
+#include <QPolygonF>
 #include <algorithm>
 #include <cmath>
 
@@ -25,7 +26,7 @@ GameCanvas::GameCanvas(QWidget *parent):QWidget(parent){
 }
 void GameCanvas::setMap(const ArenaMap &map){
     map_=map;current_={};previous_={};selectedPad_=-1;localTeam_=-1;selectionType_="player";selectionIndex_=-1;
-    cameraInitialized_=false;camera_={map.width*Tile/2.0,map.height*Tile/2.0};
+    setWallMode(false);cameraInitialized_=false;camera_={map.width*Tile/2.0,map.height*Tile/2.0};
     visible_.fill('\0',map.width*map.height);explored_=visible_;
     update();
 }
@@ -73,16 +74,36 @@ void GameCanvas::dispatch(){
     i.left=keys_.contains(controls_.left)||keys_.contains(Qt::Key_Left);
     i.right=keys_.contains(controls_.right)||keys_.contains(Qt::Key_Right);
     i.fire=shooting_||keys_.contains(controls_.fire);
-    i.mine=keys_.contains(controls_.mine);i.wall=keys_.contains(controls_.wall);
+    i.mine=keys_.contains(controls_.mine);i.wall=false; // Walls use reliable discrete build commands, not a held network key.
     i.aimX=aim_.x();i.aimY=aim_.y();onInput(i);
 
 }
-void GameCanvas::keyPressEvent(QKeyEvent *e){if(!e->isAutoRepeat())keys_.insert(e->key());e->accept();}
+void GameCanvas::setWallMode(bool enabled){
+    if(wallMode_==enabled)return;
+    wallMode_=enabled;shooting_=false;
+    if(onWallModeChanged)onWallModeChanged(enabled);
+    update();
+}
+void GameCanvas::keyPressEvent(QKeyEvent *e){
+    if(!e->isAutoRepeat()){
+        if(e->key()==controls_.wall)setWallMode(!wallMode_);
+        else if(e->key()==Qt::Key_Escape)setWallMode(false);
+        else keys_.insert(e->key());
+    }
+    e->accept();
+}
 void GameCanvas::keyReleaseEvent(QKeyEvent *e){if(!e->isAutoRepeat())keys_.remove(e->key());e->accept();}
 void GameCanvas::mouseMoveEvent(QMouseEvent *e){mouse_=e->position();}
 void GameCanvas::mousePressEvent(QMouseEvent *e){
     if(e->button()!=Qt::LeftButton&&e->button()!=Qt::RightButton)return;
     setFocus();mouse_=e->position();aim_=canvasPoint(mouse_);
+    if(wallMode_){
+        if(e->button()==Qt::RightButton){setWallMode(false);return;}
+        // Snap to the tile on the cursor. The host checks costs and all placement rules.
+        QPoint tile(int(std::floor(aim_.x()/Tile)),int(std::floor(aim_.y()/Tile)));
+        if(onBuildWall)onBuildWall({(tile.x()+.5)*Tile,(tile.y()+.5)*Tile});
+        setWallMode(false);return;
+    }
     if(e->button()==Qt::LeftButton){shooting_=true;return;}
     QString type;int index=-1;double best=50;
     // Right-click to select objectives; left-click always fires (including at enemy bases).
@@ -245,15 +266,33 @@ void GameCanvas::paintEvent(QPaintEvent *){
         p.fillRect(QRectF(c.x()-50,c.y()-65,100*std::clamp(hp/std::max(1.0,max),0.0,1.0),7),co);
     }
     for(const auto &v:frame.value("towers").toArray()){
-        auto j=v.toObject();QPointF c=jsonPosition(j);if(!inView(c)||!visible(c))continue;
-        QColor co=teamColor(j.value("team").toInt());QString ty=j.value("type").toString();
-        p.setPen(QPen(co,4));p.setBrush(QColor("#243b4b"));p.drawEllipse(c,30,30);
-        p.setPen(QPen(ty=="Rocket"?QColor("#e68e5b"):ty=="Cannon"?QColor("#fee1a2"):QColor("#82dce1"),6));
+        const auto j=v.toObject();QPointF c=jsonPosition(j);if(!inView(c)||!visible(c))continue;
+        const QColor co=teamColor(j.value("team").toInt());const QString ty=j.value("type").toString();
+        p.setPen(QPen(co,4));p.setBrush(QColor("#182b34"));p.drawEllipse(c,30,30);
+        p.setPen(QPen(QColor("#627986"),3));p.setBrush(QColor("#30414a"));p.drawEllipse(c,24,24);
+        p.save();p.translate(c);p.rotate(j.value("angle").toDouble()*180/3.141592653589793);
+        p.setPen(QPen(QColor("#14202a"),2));
         if(ty=="Rocket"){
-            p.drawLine(c+QPointF(-9,8),c+QPointF(-9,-22));p.drawLine(c+QPointF(9,8),c+QPointF(9,-22));
-        }else if(ty=="Cannon")p.drawLine(c,c+QPointF(0,-33));
-        else for(int x=-8;x<=8;x+=8)p.drawLine(c+QPointF(x,8),c+QPointF(x,-28));
-        p.setPen(Qt::NoPen);
+            p.setBrush(QColor("#af6350"));p.drawRoundedRect(QRectF(-12,-18,32,36),4,4);
+            for(int y=-10;y<=10;y+=10){
+                p.setBrush(QColor("#667e87"));p.drawRoundedRect(QRectF(-6,y-4,29,8),2,2);
+                p.setBrush(QColor("#ffb86c"));p.drawEllipse(QPointF(23,y),4,4);
+            }
+        }else if(ty=="Cannon"){
+            p.setBrush(QColor("#bea374"));p.drawRoundedRect(QRectF(-12,-13,25,26),6,6);
+            p.setPen(QPen(QColor("#fce2b0"),11));p.drawLine(QPointF(6,0),QPointF(39,0));
+            p.setPen(QPen(QColor("#615c4d"),3));p.drawLine(QPointF(28,-6),QPointF(28,6));
+        }else{
+            p.setBrush(QColor("#3c929d"));p.drawRoundedRect(QRectF(-14,-11,27,22),5,5);
+            p.setPen(QPen(QColor("#98e8e6"),3));
+            for(int y=-7;y<=7;y+=7)p.drawLine(QPointF(8,y),QPointF(35,y));
+            p.setPen(QPen(QColor("#1d3135"),4));p.drawLine(QPointF(23,-11),QPointF(23,11));
+        }
+        if(j.value("flash").toDouble()>0){
+            p.setPen(Qt::NoPen);p.setBrush(QColor(255,230,128,180));
+            p.drawEllipse(QPointF(ty=="Cannon"?44:ty=="Rocket"?28:39,0),ty=="Rocket"?13:7,ty=="Rocket"?13:7);
+        }
+        p.restore();p.setPen(Qt::NoPen);
     }
     for(const auto &v:frame.value("walls").toArray()){
         QPointF c=jsonPosition(v.toObject());if(!inView(c)||!visible(c))continue;
@@ -267,9 +306,32 @@ void GameCanvas::paintEvent(QPaintEvent *){
         p.drawLine(c+QPointF(-5,-5),c+QPointF(5,5));
     }
     for(const auto &v:frame.value("bullets").toArray()){
-        QPointF c=jsonPosition(v.toObject());if(!inView(c)||!visible(c))continue;
-        p.setPen(Qt::NoPen);p.setBrush(QColor(255,193,83,65));p.drawEllipse(c,9,9);
-        p.setBrush(QColor("#fff0b3"));p.drawEllipse(c,3.8,3.8);
+        const auto j=v.toObject();QPointF c=jsonPosition(j);if(!inView(c)||!visible(c))continue;
+        QString kind=j.value("kind").toString("Cannon");
+        QPointF vel(j.value("vx").toDouble(),j.value("vy").toDouble());
+        const double length=std::hypot(vel.x(),vel.y());
+        QPointF dir=length>0?vel/length:QPointF(1,0);
+        p.setPen(Qt::NoPen);
+        if(kind=="Rocket"){
+            p.setBrush(QColor(255,113,24,85));p.drawEllipse(c-dir*8,12,12);
+            p.setPen(QPen(QColor("#ffc574"),4));p.drawLine(c-dir*18,c-dir*5);p.setPen(Qt::NoPen);
+            p.save();p.translate(c);p.rotate(std::atan2(dir.y(),dir.x())*180/3.141592653589793);
+            p.setBrush(QColor("#f7e3ad"));p.drawRoundedRect(QRectF(-10,-4,20,8),3,3);
+            p.setBrush(QColor("#b95742"));QPolygonF tip;tip << QPointF(11,0) << QPointF(4,-5) << QPointF(4,5);p.drawPolygon(tip);p.restore();
+        }else if(kind=="JeepMG"||kind=="Minigun"){
+            p.setPen(QPen(QColor("#b4f5ff"),kind=="JeepMG"?2:2.7));
+            p.drawLine(c-dir*10,c+dir*3);p.setPen(Qt::NoPen);p.setBrush(QColor("#dfffff"));p.drawEllipse(c,2,2);
+        }else{
+            p.setBrush(QColor(250,210,130,65));p.drawEllipse(c,8,8);
+            p.setBrush(QColor("#ffe4ac"));p.drawEllipse(c,4,4);
+        }
+    }
+    for(const auto &v:frame.value("explosions").toArray()){
+        const auto j=v.toObject();QPointF c=jsonPosition(j);if(!inView(c)||!visible(c))continue;
+        const double life=j.value("life").toDouble();const bool rocket=j.value("kind").toString()=="Rocket";
+        const double radius=(rocket?88.0:30.0)*(1.0-std::clamp(life/0.45,0.0,1.0)*0.75);
+        p.setPen(QPen(QColor(255,190,80,int(180*std::clamp(life/0.45,0.0,1.0))),3));
+        p.setBrush(QColor(255,112,29,int(75*std::clamp(life/0.45,0.0,1.0))));p.drawEllipse(c,radius,radius);p.setPen(Qt::NoPen);
     }
     for(const auto &v:frame.value("players").toArray()){
         const auto j=v.toObject();if(!j.value("alive").toBool())continue;
@@ -289,8 +351,23 @@ void GameCanvas::paintEvent(QPaintEvent *){
             p.drawRoundedRect(QRectF(-15,-11,30,22),3,3);
             p.setBrush(co.lighter(130));p.drawRect(QRectF(-1,-11,23,7));p.drawRect(QRectF(-1,4,23,7));
         }else p.drawRoundedRect(QRectF(-12,-12,24,24),4,4);
-        p.setPen(QPen(QColor("#0b141b"),2));p.setBrush(co.lighter(135));p.drawRoundedRect(QRectF(0,-5,29,10),4,4);
-        p.setBrush(co.darker(145));p.drawEllipse(QPointF(0,0),8,8);
+        p.setPen(QPen(QColor("#0b141b"),2));p.setBrush(co.lighter(135));
+        if(vehicle=="Jeep"){
+            p.drawRoundedRect(QRectF(0,-2,22,4),2,2);
+        }else if(vehicle=="Missile launcher"){
+            p.setBrush(QColor("#526475"));
+            for(int y=-9;y<=9;y+=9){p.drawRoundedRect(QRectF(-3,y-3,27,6),2,2);
+                p.setBrush(QColor("#e3a45b"));p.drawEllipse(QPointF(24,y),3,3);p.setBrush(QColor("#526475"));}
+        }else{
+            p.drawRoundedRect(QRectF(0,-5,29,10),4,4);
+            p.setBrush(co.darker(145));p.drawEllipse(QPointF(0,0),8,8);
+            // Heavy armor plate visible on the tank chassis.
+            p.setPen(QPen(co.lighter(150),2));p.setBrush(Qt::NoBrush);p.drawRoundedRect(QRectF(-11,-11,22,22),4,4);
+        }
+        if(j.value("flash").toDouble()>0){
+            p.setPen(Qt::NoPen);p.setBrush(QColor(255,231,137,185));
+            p.drawEllipse(QPointF(vehicle=="Tank"?31:vehicle=="Jeep"?26:26,0),vehicle=="Missile launcher"?14:7,vehicle=="Missile launcher"?14:7);
+        }
         p.restore();
         p.setPen(j.value("id").toInt()==localId_?QColor("#ffe39b"):QColor("#edf6f4"));
         QFont font=p.font();font.setPixelSize(11);font.setBold(true);p.setFont(font);
@@ -298,6 +375,31 @@ void GameCanvas::paintEvent(QPaintEvent *){
         p.fillRect(QRectF(c.x()-17,c.y()+19,34,4),QColor("#101c1f"));
         p.fillRect(QRectF(c.x()-17,c.y()+19,34*std::clamp(j.value("hp").toDouble()/std::max(1.0,j.value("maxHp").toDouble()),0.0,1.0),4),QColor("#9ef2a3"));
         if(j.value("id").toInt()==localId_){p.setPen(QPen(QColor("#ffe39b"),1.2));p.setBrush(Qt::NoBrush);p.drawEllipse(c,24,24);}
+    }
+    if(wallMode_){
+        QPointF target=canvasPoint(mouse_);
+        const QPoint tile(int(std::floor(target.x()/Tile)),int(std::floor(target.y()/Tile)));
+        const QRectF ghost(tile.x()*Tile,tile.y()*Tile,Tile,Tile);
+        bool possible=map_.passable(tile.x(),tile.y())&&visible(ghost.center());
+        const auto banks=frame.value("banks").toArray();
+        if(localTeam_>=0&&localTeam_<banks.size()){
+            const auto supplies=banks.at(localTeam_).toArray();
+            if(supplies.size()>5)possible=possible&&supplies.at(5).toInt()>=12;
+        }
+        const auto dist=[&](QPointF c){return std::hypot(c.x()-ghost.center().x(),c.y()-ghost.center().y());};
+        for(const auto &v:frame.value("players").toArray()){
+            const auto j=v.toObject();if(!j.value("alive").toBool())continue;
+            QPointF c=jsonPosition(j);
+            if(j.value("id").toInt()==localId_)possible=possible&&dist(c)<=5*Tile;
+            possible=possible&&dist(c)>=34;
+        }
+        for(const auto &b:map_.bases)possible=possible&&dist(QPointF((b.x()+.5)*Tile,(b.y()+.5)*Tile))>=3*Tile;
+        for(const auto &n:map_.nodes)possible=possible&&dist(QPointF((n.tile.x()+.5)*Tile,(n.tile.y()+.5)*Tile))>=2*Tile;
+        for(const auto &pad:map_.towerPads)possible=possible&&dist(QPointF((pad.x()+.5)*Tile,(pad.y()+.5)*Tile))>=2*Tile;
+        for(const auto &w:frame.value("walls").toArray())possible=possible&&dist(jsonPosition(w.toObject()))>=Tile;
+        p.setPen(QPen(possible?QColor("#7df5a9"):QColor("#ff7777"),3,Qt::DashLine));
+        p.setBrush(possible?QColor(70,210,120,65):QColor(230,65,65,60));p.drawRect(ghost);
+        p.setPen(Qt::NoPen);
     }
     // Fog overlays all static terrain; dynamic actors beyond vision were also removed by the server.
     p.setPen(Qt::NoPen);
@@ -334,6 +436,13 @@ void GameCanvas::paintEvent(QPaintEvent *){
         p.drawRect(viewport.intersected(QRectF(mini)));p.setPen(Qt::NoPen);
     }
     p.setPen(QPen(QColor("#607d88"),1));p.drawRect(mini);
+    if(wallMode_){
+        QRect textRect(15,height()-71,std::min(550,width()-30),53);
+        p.fillRect(textRect,QColor(13,43,52,235));p.setPen(QColor("#ffe4a2"));
+        p.setFont(QFont("Segoe UI",11,QFont::Bold));
+        p.drawText(textRect.adjusted(10,5,-5,-5),Qt::AlignVCenter|Qt::TextWordWrap,
+            "BUILD STONE WALL · 12 Stone · Left-click a tile · Right-click / Esc to cancel");
+    }
     int win=frame.value("winner").toInt(-1);
     if(win>=0){p.fillRect(rect(),QColor(3,9,15,180));QFont f("Segoe UI",26,QFont::Bold);p.setFont(f);
         p.setPen(teamColor(win));p.drawText(rect(),Qt::AlignCenter,QString("TEAM %1 WINS!").arg(win+1));}

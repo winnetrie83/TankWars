@@ -9,6 +9,7 @@
 #include <QRandomGenerator>
 #include <QSet>
 #include <algorithm>
+#include <cmath>
 
 namespace tw {
 Session::Session(QObject *parent):QObject(parent){
@@ -239,6 +240,16 @@ void Session::purchase(const QString &kind,int pad){
     if(host_)world_.upgrade(myId_,kind,pad);
     else send(client_,{{"type","buy"},{"kind",kind},{"pad",pad}});
 }
+void Session::chooseRespawn(const QString &vehicle){
+    if(phase_!=Phase::Playing)return;
+    if(host_)world_.requestRespawn(myId_,vehicle);
+    else send(client_,{{"type","respawn_vehicle"},{"vehicle",vehicle}});
+}
+void Session::buildWallAt(QPointF position){
+    if(phase_!=Phase::Playing)return;
+    if(host_)world_.buildWall(myId_,position);
+    else send(client_,{{"type","build_wall"},{"x",position.x()},{"y",position.y()}});
+}
 void Session::selectObject(const QString &type,int index){
     if(phase_!=Phase::Playing)return;
     if(host_)world_.select(myId_,type,index);
@@ -298,6 +309,11 @@ void Session::hostMessage(QTcpSocket *socket,const QJsonObject &j){
     else if(type=="select"&&phase_==Phase::Playing)world_.select(peer.id,j.value("object").toString(),j.value("index").toInt(-1));
     else if(type=="input"&&phase_==Phase::Playing)world_.setInput(peer.id,Input::fromJson(j.value("input").toObject()));
     else if(type=="buy"&&phase_==Phase::Playing)world_.upgrade(peer.id,j.value("kind").toString(),j.value("pad").toInt(-1));
+    else if(type=="respawn_vehicle"&&phase_==Phase::Playing)world_.requestRespawn(peer.id,j.value("vehicle").toString());
+    else if(type=="build_wall"&&phase_==Phase::Playing){
+        const double x=j.value("x").toDouble(-1e6),y=j.value("y").toDouble(-1e6);
+        if(std::isfinite(x)&&std::isfinite(y))world_.buildWall(peer.id,{x,y});
+    }
 }
 void Session::clientMessage(const QJsonObject &j){
     QString type=j.value("type").toString();

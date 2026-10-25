@@ -23,8 +23,12 @@ public:
     QString selectionType()const{return selectionType_;}
     int selectionIndex()const{return selectionIndex_;}
     void resetInput(){keys_.clear();shooting_=false;}
+    void setWallMode(bool enabled);
+    bool wallMode()const{return wallMode_;}
     std::function<void(const Input &)> onInput;
     std::function<void(const QString &,int)> onSelection;
+    std::function<void(QPointF)> onBuildWall;
+    std::function<void(bool)> onWallModeChanged;
 protected:
     void paintEvent(QPaintEvent *)override;
     void keyPressEvent(QKeyEvent *)override;
@@ -42,7 +46,7 @@ private:
     QSet<int> keys_;
     QByteArray visible_,explored_;
     QPointF mouse_,aim_,camera_;
-    bool shooting_=false,cameraInitialized_=false;
+    bool shooting_=false,cameraInitialized_=false,wallMode_=false;
     int selectedPad_=-1,selectionIndex_=-1,localId_=-1,localTeam_=-1;
     QString selectionType_="player";
     double scale_=1.35,offsetX_=0,offsetY_=0;

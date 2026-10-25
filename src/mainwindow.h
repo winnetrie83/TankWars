@@ -6,6 +6,7 @@
 #include "controls.h"
 #include <QCheckBox>
 #include <QComboBox>
+#include <QGroupBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMainWindow>
@@ -15,7 +16,6 @@
 #include <QStackedWidget>
 #include <QTableWidget>
 #include <QVBoxLayout>
-#include <QGroupBox>
 
 namespace tw {
 class MainWindow : public QMainWindow {
@@ -38,7 +38,8 @@ private:
     GameCanvas *canvas_=nullptr;
     QLabel *hudName_=nullptr,*hudHealth_=nullptr,*hudTeam_=nullptr,*hudBases_=nullptr,*hudPad_=nullptr,*hudResult_=nullptr;
     QGroupBox *upgradeGroup_=nullptr;QVBoxLayout *upgradeLayout_=nullptr;
-    QPushButton *playerSelect_=nullptr;
+    QPushButton *playerSelect_=nullptr,*buildWallButton_=nullptr,*respawnConfirm_=nullptr;
+    QComboBox *respawnVehicle_=nullptr;QLabel *respawnHint_=nullptr;QGroupBox *respawnGroup_=nullptr;
     QVector<QLabel*> resourceLabels_;
     QJsonObject lastFrame_;
     QByteArray upgradeSignature_;

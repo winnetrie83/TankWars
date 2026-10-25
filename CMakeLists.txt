@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(TankWars VERSION 0.3.0 LANGUAGES CXX)
+project(TankWars VERSION 0.3.3 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets Network)
@@ -21,6 +21,7 @@ qt_add_executable(TankWars
 qt_add_resources(TankWars "tankwars_audio" PREFIX "/audio"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets"
     FILES assets/shot.wav assets/hit.wav assets/blast.wav assets/capture.wav assets/click.wav
+          assets/jeep_mg.wav assets/minigun.wav assets/cannon.wav assets/rocket.wav assets/rocket_blast.wav assets/mine_blast.wav
 )
 target_link_libraries(TankWars PRIVATE Qt6::Widgets Qt6::Network)
 if(Qt6Multimedia_FOUND)

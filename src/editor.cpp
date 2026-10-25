@@ -56,7 +56,7 @@ void EditorCanvas::paintEvent(QPaintEvent *){
             QPoint b=current.bases[team];int dx=tile.x()-b.x(),dy=tile.y()-b.y();
             if(dx*dx+dy*dy<=36){owner=team;break;}
         }
-        QColor color=owner<0?QColor("#d3e6ef"):QColor::fromHsv((owner*75+200)%360,230,250);
+        QColor color=owner<0?QColor::fromRgb(0xd3e6ef):QColor::fromHsv((owner*75+200)%360,230,250);
         QPointF c((tile.x()+.5)*Tile,(tile.y()+.5)*Tile);
         QColor fill=color;fill.setAlpha(55);p.setPen(QPen(color,3));p.setBrush(fill);
         p.drawRoundedRect(QRectF(c.x()-26,c.y()-26,52,52),6,6);

@@ -11,7 +11,7 @@ inline const QStringList resourceNames = {"Oil", "Gold", "Iron", "Copper", "Wood
 // Resource slots: oil, gold, iron, copper, wood, stone, tech (7).
 constexpr int ResourceCount = 7;
 inline constexpr int Version = 1;  // JSON map format; original maps remain compatible.
-inline constexpr int ProtocolVersion = 3;  // Per-team fog-of-war network protocol.
+inline constexpr int ProtocolVersion = 4;  // Per-team fog-of-war network protocol.
 
 struct ResourceNode { QPoint tile; int type=0; };
 struct ArenaMap {

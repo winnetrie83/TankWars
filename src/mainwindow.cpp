@@ -8,6 +8,7 @@
 #include <QHBoxLayout>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QHash>
 #include <QMessageBox>
 #include <QScrollArea>
 #include <QDialog>
@@ -64,9 +65,48 @@ MainWindow::MainWindow(QWidget *parent):QMainWindow(parent){
             };
             auto prev=findSelf(lastFrame_),cur=findSelf(snap);
             if(!prev.isEmpty()&&!cur.isEmpty()){
-                if(cur.value("shots").toInt()>prev.value("shots").toInt())sounds_.play("shot");
+                if(cur.value("shots").toInt()>prev.value("shots").toInt()){
+                    const QString vehicle=cur.value("vehicle").toString();
+                    sounds_.play(vehicle=="Jeep"?"jeep_mg":vehicle=="Missile launcher"?"rocket":"cannon");
+                }
                 if(prev.value("alive").toBool()&&!cur.value("alive").toBool())sounds_.play("blast");
                 else if(cur.value("hp").toDouble()<prev.value("hp").toDouble())sounds_.play("hit");
+            }
+            // Fire audio is based on server-side shot counters, never local input polling.
+            // Other visible vehicles and towers contribute localized sound events too.
+            const QPointF listener(cur.value("x").toDouble(),cur.value("y").toDouble());
+            auto nearby=[&](const QJsonObject &j){
+                return std::hypot(j.value("x").toDouble()-listener.x(),j.value("y").toDouble()-listener.y())<560;
+            };
+            QHash<int,int> oldPlayerShots;
+            for(const auto &v:lastFrame_.value("players").toArray()){
+                const auto j=v.toObject();oldPlayerShots[j.value("id").toInt()]=j.value("shots").toInt();
+            }
+            for(const auto &v:snap.value("players").toArray()){
+                const auto j=v.toObject();int id=j.value("id").toInt();
+                if(id==session_.myId()||!oldPlayerShots.contains(id)||!nearby(j))continue;
+                if(j.value("shots").toInt()>oldPlayerShots.value(id)){
+                    const QString vehicle=j.value("vehicle").toString();
+                    sounds_.play(vehicle=="Jeep"?"jeep_mg":vehicle=="Missile launcher"?"rocket":"cannon");
+                }
+            }
+            QHash<int,int> oldTowerShots;
+            for(const auto &v:lastFrame_.value("towers").toArray()){
+                const auto j=v.toObject();oldTowerShots[j.value("id").toInt()]=j.value("shots").toInt();
+            }
+            for(const auto &v:snap.value("towers").toArray()){
+                const auto j=v.toObject();int turretId=j.value("id").toInt();
+                if(!nearby(j))continue;
+                if(j.value("shots").toInt()>oldTowerShots.value(turretId,0)){
+                    const QString type=j.value("type").toString();
+                    sounds_.play(type=="Rocket"?"rocket":type=="Minigun"?"minigun":"cannon");
+                }
+            }
+            QSet<int> oldExplosions;
+            for(const auto &v:lastFrame_.value("explosions").toArray())oldExplosions.insert(v.toObject().value("id").toInt());
+            for(const auto &v:snap.value("explosions").toArray()){
+                const auto j=v.toObject();if(oldExplosions.contains(j.value("id").toInt())||!nearby(j))continue;
+                sounds_.play(j.value("kind").toString()=="Mine"?"mine_blast":"rocket_blast");
             }
             QSet<QString> previousOwned;
             int team=cur.value("team").toInt(-1);
@@ -180,6 +220,12 @@ void MainWindow::constructGame(){
     auto *layout=new QHBoxLayout(game_);layout->setContentsMargins(9,9,9,9);
     canvas_=new GameCanvas;layout->addWidget(canvas_,1);
     canvas_->onInput=[this](const Input &in){session_.sendInput(in);};
+    canvas_->onBuildWall=[this](QPointF point){session_.buildWallAt(point);canvas_->setFocus();};
+    canvas_->onWallModeChanged=[this](bool on){
+        if(buildWallButton_)buildWallButton_->setText(on?"CANCEL WALL PLACEMENT":"BUILD STONE WALL · 12 Stone");
+        if(hudPad_)hudPad_->setText(on?"Wall mode: left-click a tile within 5 tiles of your vehicle. Right-click/Esc cancels.":
+            "Right-click a building or platform to select it.");
+    };
     canvas_->onSelection=[this](const QString &type,int index){
         session_.selectObject(type,index);
         if(hudPad_)hudPad_->setText(QString("Selected: %1 %2").arg(type).arg(index>=0?QString::number(index+1):QString()));
@@ -191,11 +237,20 @@ void MainWindow::constructGame(){
     hudTeam_=new QLabel("Team —");sidebar->addWidget(hudTeam_);
     hudHealth_=new QLabel("Tank health —");sidebar->addWidget(hudHealth_);
     hudBases_=new QLabel("Base health —");sidebar->addWidget(hudBases_);
+    respawnGroup_=new QGroupBox("CHOOSE YOUR NEXT VEHICLE");sidebar->addWidget(respawnGroup_);
+    auto *respawnLayout=new QVBoxLayout(respawnGroup_);
+    respawnHint_=new QLabel("Choose a vehicle, then confirm your respawn.");respawnHint_->setWordWrap(true);respawnLayout->addWidget(respawnHint_);
+    respawnVehicle_=new QComboBox;respawnVehicle_->addItems({"Jeep", "Tank", "Missile launcher"});respawnLayout->addWidget(respawnVehicle_);
+    respawnConfirm_=button("CONFIRM RESPAWN VEHICLE");respawnLayout->addWidget(respawnConfirm_);
+    connect(respawnConfirm_,&QPushButton::clicked,this,[this]{session_.chooseRespawn(respawnVehicle_->currentText());canvas_->setFocus();});
+    respawnGroup_->setVisible(false);
     auto *bank=new QGroupBox("TEAM RESOURCES");sidebar->addWidget(bank);
     auto *bankLayout=new QFormLayout(bank);
     static const QStringList names={"Oil","Gold","Iron","Copper","Wood","Stone","Tech"};
     for(const auto &name:names){auto *value=new QLabel("—");resourceLabels_.append(value);bankLayout->addRow(name,value);}
     playerSelect_=button("SELECT MY VEHICLE / UPGRADES");sidebar->addWidget(playerSelect_);
+    buildWallButton_=button("BUILD STONE WALL · 12 Stone");sidebar->addWidget(buildWallButton_);
+    connect(buildWallButton_,&QPushButton::clicked,this,[this]{canvas_->setWallMode(!canvas_->wallMode());canvas_->setFocus();});
     connect(playerSelect_,&QPushButton::clicked,this,[this]{canvas_->selectPlayer();canvas_->setFocus();});
     upgradeGroup_=new QGroupBox("SELECTED OBJECT · UPGRADES");sidebar->addWidget(upgradeGroup_,1);
     auto *upOuter=new QVBoxLayout(upgradeGroup_);upOuter->setContentsMargins(5,9,5,5);
@@ -207,7 +262,7 @@ void MainWindow::constructGame(){
     hudPad_=new QLabel("Right-click vehicle/base/node/tower pad to select.");hudPad_->setWordWrap(true);sidebar->addWidget(hudPad_);
     hudResult_=new QLabel("Capture platforms to earn resources.");hudResult_->setWordWrap(true);sidebar->addWidget(hudResult_);
     sidebar->addStretch();
-    auto *help=new QLabel("<b>CONTROLS</b>\nZQSD / arrows: move (AZERTY)\nMouse: aim | Left click / Space: shoot\nRight-click: select building/platform\nMouse wheel: zoom\nClick buildings to upgrade\nM = Jeep mine (2 Iron, 3 Stone)\nB = Stone wall (12 Stone)\nRespawn: 10 sec, Oil + Iron\nOn death: last tank upgrade is lost");
+    auto *help=new QLabel("<b>CONTROLS</b>\nZQSD / arrows: move (AZERTY)\nMouse: aim | Left click / Space: shoot\nRight-click: select building/platform\nMouse wheel: zoom\nClick buildings to upgrade\nM = Jeep mine (3 Oil + 2 Iron + 2 Tech)\nB = wall mode, left-click tile to build\nWall costs 12 Stone, within 5 tiles\nRespawn: choose vehicle, 10 sec, Oil + Iron\nOn death: last tank upgrade is lost");
     help->setWordWrap(true);sidebar->addWidget(help);
     auto *preferencesButton=button("KEYBINDINGS & AUDIO");sidebar->addWidget(preferencesButton);
     connect(preferencesButton,&QPushButton::clicked,this,&MainWindow::preferences);
@@ -369,12 +424,28 @@ void MainWindow::updateHud(const QJsonObject &snap){
     }
     if(team<0)return;
     hudName_->setText(mine.value("name").toString()+"  ·  "+
-        QString("%1 · A%2 G%3 S%4 R%5 F%6").arg(mine.value("vehicle").toString()).arg(mine.value("armor").toInt()).arg(mine.value("gun").toInt()).arg(mine.value("engine").toInt()).arg(mine.value("radar").toInt()).arg(mine.value("fire_rate").toInt()));
+        QString("%1 (%2 armor) · A%3 G%4 S%5 R%6 F%7")
+            .arg(mine.value("vehicle").toString()).arg(mine.value("armorClass").toString())
+            .arg(mine.value("armor").toInt()).arg(mine.value("gun").toInt()).arg(mine.value("engine").toInt())
+            .arg(mine.value("radar").toInt()).arg(mine.value("fire_rate").toInt()));
+    const bool dead=!mine.value("alive").toBool();
+    respawnGroup_->setVisible(dead);
+    upgradeGroup_->setVisible(!dead);playerSelect_->setEnabled(!dead);buildWallButton_->setEnabled(!dead);
+    if(dead&&canvas_->wallMode())canvas_->setWallMode(false);
+    if(dead){
+        const QString choice=mine.value("respawnVehicle").toString();
+        int remaining=std::max(0,int(std::ceil(mine.value("respawn").toDouble())));
+        const int cost=session_.options().respawnCost;
+        respawnHint_->setText(choice.isEmpty()?
+            QString("Choose Jeep / Tank / Missile launcher, then confirm.\nRespawn in %1s, costs %2 Oil + %2 Iron. No automatic vehicle selected.").arg(remaining).arg(cost):
+            QString("Confirmed: %1. %2s remaining. Costs %3 Oil + %3 Iron. Spawns when resources are available.").arg(choice).arg(remaining).arg(cost));
+        respawnConfirm_->setText(choice.isEmpty()?"CONFIRM RESPAWN VEHICLE":"CHANGE RESPAWN SELECTION");
+    }
     hudTeam_->setText(QString("TEAM %1").arg(team+1));
     hudTeam_->setStyleSheet(QString("font-weight:bold;color:%1;").arg(session_.teamColors().value(team).name()));
-    if(mine.value("alive").toBool())hudHealth_->setText(QString("Tank: %1 / %2 HP")
+    if(mine.value("alive").toBool())hudHealth_->setText(QString("Vehicle: %1 / %2 HP")
         .arg(int(mine.value("hp").toDouble())).arg(mine.value("maxHp").toInt()));
-    else hudHealth_->setText(QString("DESTROYED · %1s until respawn (if funded)")
+    else hudHealth_->setText(QString("DESTROYED · %1s · select a respawn vehicle")
         .arg(std::max(0,int(std::ceil(mine.value("respawn").toDouble())))));
     QJsonObject base;
     for(const auto &entry:snap.value("bases").toArray()){

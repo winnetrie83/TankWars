@@ -11,7 +11,7 @@ namespace tw {
 SoundManager::SoundManager(QObject *parent){
     QSettings s;enabled_=s.value("audio/enabled",true).toBool();
     volume_=s.value("audio/volume",65).toInt();
-    const QStringList names={"shot","hit","blast","capture","click"};
+    const QStringList names={"shot","hit","blast","capture","click","jeep_mg","minigun","cannon","rocket","rocket_blast","mine_blast"};
 #ifdef TW_HAVE_MULTIMEDIA
     for(const QString &name:names){
         auto *sound=new QSoundEffect(parent);

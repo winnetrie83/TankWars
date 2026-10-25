@@ -3,7 +3,6 @@
 #include <QCoreApplication>
 #include <QStyleFactory>
 
-
 int main(int argc,char **argv){
     QApplication app(argc,argv);
     QCoreApplication::setOrganizationName("Winnetrie");

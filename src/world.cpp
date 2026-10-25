@@ -5,12 +5,26 @@
 #include <QtMath>
 #include <algorithm>
 #include <cmath>
+#include <QStringList>
 
 namespace tw {
 static double distance(QPointF a,QPointF b){return std::hypot(a.x()-b.x(),a.y()-b.y());}
 static QJsonObject xy(QPointF p){return {{"x",p.x()},{"y",p.y()}};}
 static QPointF vec(const QJsonObject &j){return {j.value("x").toDouble(),j.value("y").toDouble()};}
 static std::array<int,ResourceCount> price(int oil=0,int gold=0,int iron=0,int copper=0,int wood=0,int stone=0,int tech=0){return {oil,gold,iron,copper,wood,stone,tech};}
+// Armor tiers are chassis-defined; personal Armor upgrades increase durability without changing tier.
+// Medium tier is intentionally defined now for future chassis.
+enum class ArmorClass { Light, Medium, Heavy };
+static ArmorClass armorForVehicle(const QString &vehicle){return vehicle=="Tank"?ArmorClass::Heavy:ArmorClass::Light;}
+static QString armorName(ArmorClass armor){
+    switch(armor){case ArmorClass::Light:return "Light";case ArmorClass::Medium:return "Medium";case ArmorClass::Heavy:return "Heavy";}
+    return "Light";
+}
+static double mineDamageFor(ArmorClass armor){
+    switch(armor){case ArmorClass::Light:return 125;case ArmorClass::Medium:return 103;case ArmorClass::Heavy:return 85;}
+    return 125;
+}
+
 static QString insufficient(const std::array<int,ResourceCount> &have,const std::array<int,ResourceCount> &cost){
     QStringList missing;
     for(int r=0;r<ResourceCount;++r)if(have[r]<cost[r])missing<<QString("%1 %2").arg(cost[r]-have[r]).arg(resourceNames[r]);
@@ -58,7 +72,7 @@ bool World::spend(int team,const std::array<int,ResourceCount> &cost){
 }
 void World::start(const ArenaMap &map,const MatchOptions &settings,const QVector<Participant> &players){
     map_=map;options_=settings;winner_=-1;elapsed_=0;baseIncome_=0;nextBulletId_=0;
-    tanks_.clear();bases_.clear();nodes_.clear();pads_.clear();turrets_.clear();bullets_.clear();mines_.clear();walls_.clear();supplies_.clear();
+    tanks_.clear();bases_.clear();nodes_.clear();pads_.clear();turrets_.clear();bullets_.clear();mines_.clear();walls_.clear();explosions_.clear();supplies_.clear();
     for(int team=0;team<settings.teams;++team){
         Base b;b.pos=tileCenter(map.bases[team]);bases_.append(b);
         std::array<int,ResourceCount> bank{};bank.fill(25*settings.supplyMultiplier);bank[0]=35*settings.supplyMultiplier;supplies_.append(bank);
@@ -82,6 +96,20 @@ void World::start(const ArenaMap &map,const MatchOptions &settings,const QVector
 }
 void World::setInput(int id,const Input &input){if(auto *t=tank(id);t&&!t->bot)t->input=input;}
 void World::enableBotTakeover(int id){if(auto *t=tank(id)){t->bot=true;t->strategy="Defender";t->name+=" (AI)";t->input={};}}
+QString World::requestRespawn(int id,const QString &vehicle){
+    Tank *t=tank(id);if(!t)return "Unknown player";
+    if(t->alive)return t->message="Vehicle selection is available after destruction";
+    if(t->bot)return t->message="AI chooses its own vehicle";
+    if(bases_[t->team].hp<=0)return t->message="Base destroyed: respawn unavailable";
+    if(vehicle!="Jeep"&&vehicle!="Tank"&&vehicle!="Missile launcher")return t->message="Unknown vehicle";
+    t->respawnVehicle=vehicle;
+    return t->message="Respawn selected: "+vehicle;
+}
+QString World::buildWall(int id,QPointF position){
+    Tank *t=tank(id);if(!t)return "Unknown player";
+    if(!t->alive)return t->message="Cannot build while destroyed";
+    placeWall(*t,position);return t->message;
+}
 void World::select(int id,const QString &type,int index){
     auto *t=tank(id);if(!t)return;
     if(type=="player"){t->selection="player";t->selectionIndex=-1;}
@@ -166,7 +194,7 @@ QString World::upgrade(int id,const QString &kind,int padIndex){
     else if(kind=="base_hp"){bases_[t->team].maxHp+=200;bases_[t->team].hp=std::min(bases_[t->team].maxHp,bases_[t->team].hp+260);}
     else if(kind=="base_radar")++bases_[t->team].radar;
     else if(kind=="tower_minigun"||kind=="tower_cannon"||kind=="tower_rocket"){
-        Turret tr;tr.padIndex=padIndex;tr.pos=pads_[padIndex].pos;tr.team=t->team;
+        Turret tr;tr.id=++nextBulletId_;tr.padIndex=padIndex;tr.pos=pads_[padIndex].pos;tr.team=t->team;
         tr.type=kind=="tower_cannon"?"Cannon":kind=="tower_rocket"?"Rocket":"Minigun";turrets_.append(tr);
     }else{
         for(auto &tr:turrets_)if(tr.padIndex==padIndex&&tr.hp>0){
@@ -183,21 +211,26 @@ void World::fire(Tank &t){
     if(!t.alive||t.fireCooldown>0)return;
     const double a=t.facing;QPointF dir(std::cos(a),std::sin(a));
     const double multiplier=t.vehicle=="Jeep"?0.5:t.vehicle=="Missile launcher"?2.0:1.0;
-    bullets_.append({t.pos+dir*24,dir*(350.0+22*t.gun),t.id,t.team,(25.0+9*t.gun)*multiplier,2.0,++nextBulletId_});
-    // Cooldown depends on both weapon power and dedicated rate-of-fire upgrade.
-    t.fireCooldown=std::max(0.11,(0.64-0.045*t.gun)*std::pow(0.82,t.fireRate));
-    ++t.shots;
+    const bool jeep=t.vehicle=="Jeep",rocket=t.vehicle=="Missile launcher";
+    const QString kind=jeep?"JeepMG":rocket?"Rocket":"Cannon";
+    const double speed=jeep?580.0:rocket?245.0:405.0;
+    const double damage=(25.0+9*t.gun)*multiplier;
+    bullets_.append({t.pos+dir*24,dir*(speed+8*t.gun),t.id,t.team,damage,rocket?3.4:2.0,++nextBulletId_,kind});
+    // The Jeep fires rapid small-calibre bursts, the tank shells, and the ML slow explosive rockets.
+    const double interval=jeep?0.17:rocket?1.20:0.64;
+    t.fireCooldown=std::max(jeep?0.065:0.11,interval*std::pow(0.82,t.fireRate));
+    ++t.shots;t.lastShotTime=elapsed_;
 }
 void World::placeMine(Tank &t){
     if(t.vehicle!="Jeep"){t.message="Only the Jeep can lay mines";return;}
     if(t.minesPlaced>=8){t.message="Mine limit reached (8 active)";return;}
-    auto cost=price(0,0,2,0,0,3);
-    if(!spend(t.team,cost)){t.message="Mine requires 2 Iron + 3 Stone";return;}
+    const auto cost=price(3,0,2,0,0,0,2);
+    if(!spend(t.team,cost)){t.message="Mine requires 3 Oil + 2 Iron + 2 Tech. "+insufficient(supplies_[t.team],cost);return;}
     mines_.append({t.pos,t.team,t.id});++t.minesPlaced;t.message="Mine laid";
 }
-void World::placeWall(Tank &t){
+void World::placeWall(Tank &t,QPointF position){
     auto cost=price(0,0,0,0,0,12);
-    const QPoint tile(int(std::floor(t.input.aimX/Tile)),int(std::floor(t.input.aimY/Tile)));
+    const QPoint tile(int(std::floor(position.x()/Tile)),int(std::floor(position.y()/Tile)));
     if(!map_.passable(tile.x(),tile.y())||occupiedWall(tile)){t.message="Place walls only on empty grass";return;}
     QPointF center=tileCenter(tile);
     if(distance(t.pos,center)>5*Tile){t.message="Wall placement: maximum range is 5 tiles";return;}
@@ -282,9 +315,25 @@ void World::applyDeathPenalty(Tank &t){
 void World::damageTank(Tank &target,double amount,int killerTeam){
     if(!target.alive)return;
     target.health-=amount;if(target.health>0)return;
-    target.health=0;target.alive=false;target.respawn=10;applyDeathPenalty(target);
+    target.health=0;target.alive=false;target.respawn=10;target.respawnVehicle=target.bot?target.vehicle:QString();target.message=target.bot?"Respawning as "+target.vehicle:"Choose a vehicle for your next respawn";applyDeathPenalty(target);
     if(killerTeam>=0&&killerTeam<supplies_.size()&&killerTeam!=target.team)
         for(int r=0;r<ResourceCount;++r){int amount=std::min(4,supplies_[target.team][r]);supplies_[target.team][r]-=amount;supplies_[killerTeam][r]+=amount;}
+}
+void World::detonate(QPointF center,double strength,int team,const QString &kind){
+    explosions_.append({center,0.45,++nextBulletId_,kind});
+    const double radius=86.0;
+    const auto impact=[&](QPointF target){return distance(target,center)<=radius?
+        strength*std::max(0.22,1.0-distance(target,center)/radius*0.70):0.0;};
+    for(auto &t:tanks_)if(t.alive&&(options_.friendlyFire||t.team!=team)){
+        double d=impact(t.pos);if(d>0)damageTank(t,d,team);
+    }
+    for(int i=0;i<bases_.size();++i)if(bases_[i].hp>0&&(options_.friendlyFire||i!=team)){
+        const double d=impact(bases_[i].pos);if(d>0)bases_[i].hp=std::max(0.0,bases_[i].hp-d);
+    }
+    for(auto &tr:turrets_)if(tr.hp>0&&(options_.friendlyFire||tr.team!=team)){
+        double d=impact(tr.pos);if(d>0)tr.hp=std::max(0.0,tr.hp-d);
+    }
+    for(auto &wall:walls_)if(wall.hp>0){double d=impact(tileCenter(wall.tile));if(d>0)wall.hp=std::max(0.0,wall.hp-d);}
 }
 void World::step(double dt){
     if(winner_>=0)return;dt=std::clamp(dt,0.0,0.10);elapsed_+=dt;
@@ -293,9 +342,9 @@ void World::step(double dt){
     for(auto &t:tanks_){
         if(!t.alive){
             if(bases_[t.team].hp>0){t.respawn=std::max(0.0,t.respawn-dt);
-                if(t.respawn<=0){auto cost=price(options_.respawnCost,0,options_.respawnCost);
-                    if(spend(t.team,cost)){t.alive=true;t.health=maxHealth(t);
-                        QPointF p=bases_[t.team].pos+QPointF(65,60);t.pos=freeAt(p)?p:bases_[t.team].pos;t.input={};}
+                if(t.respawn<=0&&(t.bot||!t.respawnVehicle.isEmpty())){auto cost=price(options_.respawnCost,0,options_.respawnCost);
+                    if(spend(t.team,cost)){t.vehicle=t.bot?t.vehicle:t.respawnVehicle;t.respawnVehicle.clear();t.alive=true;t.health=maxHealth(t);
+                        QPointF p=bases_[t.team].pos+QPointF(65,60);t.pos=freeAt(p)?p:bases_[t.team].pos;t.input={};t.message="Respawned";}
                 }
             }
             continue;
@@ -312,12 +361,16 @@ void World::step(double dt){
         QPointF aim(i.aimX-t.pos.x(),i.aimY-t.pos.y());if(std::hypot(aim.x(),aim.y())>2)t.facing=std::atan2(aim.y(),aim.x());
         if(i.fire)fire(t);
         if(i.mine&&!t.mineHeld&&t.actionCooldown<=0){placeMine(t);t.actionCooldown=0.3;}
-        if(i.wall&&!t.wallHeld&&t.actionCooldown<=0){placeWall(t);t.actionCooldown=0.3;}
+        if(i.wall&&!t.wallHeld&&t.actionCooldown<=0){placeWall(t,{i.aimX,i.aimY});t.actionCooldown=0.3;}
         t.mineHeld=i.mine;t.wallHeld=i.wall;
     }
     // Friendly mines are invisible to opponents even in full vision until triggered.
     for(int m=mines_.size()-1;m>=0;--m){auto mine=mines_[m];bool exploded=false;
-        for(auto &t:tanks_)if(t.alive&&t.team!=mine.team&&distance(t.pos,mine.pos)<19){damageTank(t,125,mine.team);exploded=true;break;}
+        for(auto &t:tanks_)if(t.alive&&t.team!=mine.team&&distance(t.pos,mine.pos)<19){
+            // Light armor: lethal without upgrades, survivable with one armor upgrade.
+            // Heavy armor: protection against mines; Medium reserved for future vehicles.
+            const double mineDamage=mineDamageFor(armorForVehicle(t.vehicle));
+            damageTank(t,mineDamage,mine.team);explosions_.append({mine.pos,0.40,++nextBulletId_,"Mine"});exploded=true;break;}
         if(exploded){mines_.removeAt(m);if(auto *owner=tank(mine.owner))owner->minesPlaced=std::max(0,owner->minesPlaced-1);}
     }
     for(auto &node:nodes_){
@@ -351,29 +404,53 @@ void World::step(double dt){
         const double radius=(tower.type=="Rocket"?320:tower.type=="Cannon"?280:250)+tower.radar*46;
         Tank *target=nullptr;double best=radius;
         for(auto &enemy:tanks_)if(enemy.alive&&enemy.team!=tower.team&&distance(enemy.pos,tower.pos)<best){best=distance(enemy.pos,tower.pos);target=&enemy;}
+        if(target){
+            QPointF aim=target->pos-tower.pos;tower.aimAngle=std::atan2(aim.y(),aim.x());
+        }
         if(target&&tower.cooldown<=0){QPointF dir=target->pos-tower.pos;double d=distance(target->pos,tower.pos);
             if(d>1){double vel=tower.type=="Rocket"?265:440;double dmg=tower.type=="Rocket"?65:tower.type=="Cannon"?42:14;
-                bullets_.append({tower.pos+dir*(28/d),dir*(vel/d),-1,tower.team,dmg+tower.power*8,2,++nextBulletId_});
+                bullets_.append({tower.pos+dir*(28/d),dir*(vel/d),-1,tower.team,dmg+tower.power*8,tower.type=="Rocket"?3.3:2.0,++nextBulletId_,tower.type});
                 double interval=tower.type=="Rocket"?1.65:tower.type=="Cannon"?1.05:0.22;
-                tower.cooldown=std::max(0.10,interval*std::pow(0.8,tower.rate));++tower.shots;
+                tower.cooldown=std::max(0.08,interval*std::pow(0.8,tower.rate));++tower.shots;tower.lastShotTime=elapsed_;
             }
         }
     }
+    // Rockets detonate on collision and damage entities in an area. Shells and MG rounds are direct-hit.
     for(auto &bullet:bullets_){
         if(bullet.life<=0)continue;bullet.life-=dt;
-        const int n=std::max(1,int(std::ceil(std::hypot(bullet.velocity.x(),bullet.velocity.y())*dt/9)));
-        for(int s=0;s<n&&bullet.life>0;++s){
+        const int n=std::max(1,int(std::ceil(std::hypot(bullet.velocity.x(),bullet.velocity.y())*dt/8)));
+        bool hit=false;
+        for(int s=0;s<n&&bullet.life>0&&!hit;++s){
             bullet.pos+=bullet.velocity*(dt/n);
-            QPoint tile(int(bullet.pos.x()/Tile),int(bullet.pos.y()/Tile));
-            if(!map_.passable(tile.x(),tile.y())){bullet.life=0;break;}
-            bool hit=false;
-            for(auto &wall:walls_)if(wall.hp>0&&wall.tile==tile){wall.hp=std::max(0.0,wall.hp-bullet.damage);hit=true;break;}
-            if(!hit)for(auto &t:tanks_)if(t.alive&&t.id!=bullet.owner&&(options_.friendlyFire||t.team!=bullet.team)&&distance(t.pos,bullet.pos)<15){damageTank(t,bullet.damage,bullet.team);hit=true;break;}
-            if(!hit)for(int team=0;team<bases_.size();++team)if(bases_[team].hp>0&&(options_.friendlyFire||team!=bullet.team)&&distance(bases_[team].pos,bullet.pos)<46){bases_[team].hp=std::max(0.0,bases_[team].hp-bullet.damage);hit=true;break;}
-            if(!hit)for(auto &tr:turrets_)if(tr.hp>0&&(options_.friendlyFire||tr.team!=bullet.team)&&distance(tr.pos,bullet.pos)<29){tr.hp=std::max(0.0,tr.hp-bullet.damage);hit=true;break;}
-            if(hit)bullet.life=0;
+            QPoint tile(int(std::floor(bullet.pos.x()/Tile)),int(std::floor(bullet.pos.y()/Tile)));
+            if(!map_.passable(tile.x(),tile.y())){hit=true;break;}
+            for(auto &wall:walls_)if(wall.hp>0&&wall.tile==tile){
+                if(bullet.kind!="Rocket")wall.hp=std::max(0.0,wall.hp-bullet.damage);
+                hit=true;break;
+            }
+            if(!hit)for(auto &t:tanks_)if(t.alive&&t.id!=bullet.owner&&
+                (options_.friendlyFire||t.team!=bullet.team)&&distance(t.pos,bullet.pos)<15){
+                if(bullet.kind!="Rocket")damageTank(t,bullet.damage,bullet.team);
+                hit=true;break;
+            }
+            if(!hit)for(int team=0;team<bases_.size();++team)if(bases_[team].hp>0&&
+                (options_.friendlyFire||team!=bullet.team)&&distance(bases_[team].pos,bullet.pos)<46){
+                if(bullet.kind!="Rocket")bases_[team].hp=std::max(0.0,bases_[team].hp-bullet.damage);
+                hit=true;break;
+            }
+            if(!hit)for(auto &tr:turrets_)if(tr.hp>0&&
+                (options_.friendlyFire||tr.team!=bullet.team)&&distance(tr.pos,bullet.pos)<29){
+                if(bullet.kind!="Rocket")tr.hp=std::max(0.0,tr.hp-bullet.damage);
+                hit=true;break;
+            }
+        }
+        if(hit){
+            if(bullet.kind=="Rocket")detonate(bullet.pos,bullet.damage,bullet.team,"Rocket");
+            bullet.life=0;
         }
     }
+    for(auto &explosion:explosions_)explosion.life-=dt;
+    explosions_.erase(std::remove_if(explosions_.begin(),explosions_.end(),[](const Explosion &e){return e.life<=0;}),explosions_.end());
     bullets_.erase(std::remove_if(bullets_.begin(),bullets_.end(),[](const Bullet &b){return b.life<=0;}),bullets_.end());
     turrets_.erase(std::remove_if(turrets_.begin(),turrets_.end(),[](const Turret &t){return t.hp<=0;}),turrets_.end());
     walls_.erase(std::remove_if(walls_.begin(),walls_.end(),[](const Wall &w){return w.hp<=0;}),walls_.end());
@@ -385,23 +462,24 @@ void World::step(double dt){
     if(alive<=1)winner_=last;
 }
 QJsonObject World::snapshot()const{
-    QJsonArray players,bases,nodes,pads,towers,bullets,banks,mines,walls;
+    QJsonArray players,bases,nodes,pads,towers,bullets,banks,mines,walls,explosions;
     for(const auto &t:tanks_){auto j=xy(t.pos);j["id"]=t.id;j["name"]=t.name;j["team"]=t.team;j["bot"]=t.bot;
-        j["vehicle"]=t.vehicle;j["alive"]=t.alive;j["hp"]=t.health;j["maxHp"]=maxHealth(t);j["angle"]=t.facing;
+        j["vehicle"]=t.vehicle;j["armorClass"]=armorName(armorForVehicle(t.vehicle));j["respawnVehicle"]=t.respawnVehicle;j["alive"]=t.alive;j["hp"]=t.health;j["maxHp"]=maxHealth(t);j["angle"]=t.facing;
         j["respawn"]=t.respawn;j["armor"]=t.armor;j["gun"]=t.gun;j["engine"]=t.engine;j["radar"]=t.radar;
-        j["fire_rate"]=t.fireRate;j["shots"]=t.shots;players.append(j);
+        j["fire_rate"]=t.fireRate;j["shots"]=t.shots;j["flash"]=std::max(0.0,0.15-(elapsed_-t.lastShotTime));players.append(j);
     }
     for(int team=0;team<bases_.size();++team){auto j=xy(bases_[team].pos);j["team"]=team;j["hp"]=bases_[team].hp;j["maxHp"]=bases_[team].maxHp;j["radar"]=bases_[team].radar;bases.append(j);}
     for(int index=0;index<nodes_.size();++index){const auto &n=nodes_[index];auto j=xy(n.pos);j["id"]=index;j["resource"]=n.resource;j["owner"]=n.owner;j["capturing"]=n.capturing;j["progress"]=n.capture;nodes.append(j);}
     for(int index=0;index<pads_.size();++index){const auto &pad=pads_[index];auto j=xy(pad.pos);j["id"]=index;j["owner"]=pad.owner;j["capturing"]=pad.capturing;j["progress"]=pad.capture;pads.append(j);}
-    for(const auto &tr:turrets_){auto j=xy(tr.pos);j["team"]=tr.team;j["pad"]=tr.padIndex;j["hp"]=tr.hp;j["maxHp"]=tr.maxHp;j["type"]=tr.type;
-        j["rate"]=tr.rate;j["power"]=tr.power;j["armor"]=tr.armor;j["range"]=tr.radar;j["shots"]=tr.shots;towers.append(j);}
-    for(const auto &b:bullets_){auto j=xy(b.pos);j["team"]=b.team;j["id"]=b.id;j["owner"]=b.owner;bullets.append(j);}
+    for(const auto &tr:turrets_){auto j=xy(tr.pos);j["team"]=tr.team;j["id"]=tr.id;j["pad"]=tr.padIndex;j["hp"]=tr.hp;j["maxHp"]=tr.maxHp;j["type"]=tr.type;
+        j["rate"]=tr.rate;j["power"]=tr.power;j["armor"]=tr.armor;j["range"]=tr.radar;j["shots"]=tr.shots;j["angle"]=tr.aimAngle;j["flash"]=std::max(0.0,0.18-(elapsed_-tr.lastShotTime));towers.append(j);}
+    for(const auto &b:bullets_){auto j=xy(b.pos);j["team"]=b.team;j["id"]=b.id;j["owner"]=b.owner;j["kind"]=b.kind;j["vx"]=b.velocity.x();j["vy"]=b.velocity.y();bullets.append(j);}
+    for(const auto &e:explosions_){auto j=xy(e.pos);j["id"]=e.id;j["kind"]=e.kind;j["life"]=e.life;explosions.append(j);}
     for(const auto &m:mines_){auto j=xy(m.pos);j["team"]=m.team;mines.append(j);}
     for(const auto &w:walls_){auto j=xy(tileCenter(w.tile));j["hp"]=w.hp;walls.append(j);}
     for(const auto &bank:supplies_){QJsonArray a;for(int quantity:bank)a.append(quantity);banks.append(a);}
     return {{"type","snapshot"},{"time",elapsed_},{"winner",winner_},{"players",players},{"bases",bases},{"nodes",nodes},
-            {"pads",pads},{"towers",towers},{"bullets",bullets},{"banks",banks},{"mines",mines},{"walls",walls}};
+            {"pads",pads},{"towers",towers},{"bullets",bullets},{"banks",banks},{"mines",mines},{"walls",walls},{"explosions",explosions}};
 }
 QJsonObject World::snapshotForTeam(int team,const QJsonObject &full)const{
     if(team<0||team>=options_.teams)return full;
@@ -414,7 +492,7 @@ QJsonObject World::snapshotForTeam(int team,const QJsonObject &full)const{
     const QByteArray vision=visibleTiles(sight,sources);
     auto visible=[&](const QJsonObject &j){return isVisibleAt(sight,vision,vec(j));};
     QJsonObject filtered=full;
-    for(const QString &key:{QString("players"),QString("bases"),QString("towers"),QString("bullets"),QString("nodes"),QString("pads"),QString("walls"),QString("mines")}){
+    for(const QString &key:{QString("players"),QString("bases"),QString("towers"),QString("bullets"),QString("nodes"),QString("pads"),QString("walls"),QString("mines"),QString("explosions")}){
         QJsonArray result;
         for(const auto &entry:full.value(key).toArray()){
             const QJsonObject j=entry.toObject();

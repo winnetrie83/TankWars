@@ -43,6 +43,8 @@ public:
     void sendInput(const Input &input);
     void purchase(const QString &kind,int pad=-1);
     void selectObject(const QString &type,int index=-1);
+    void chooseRespawn(const QString &vehicle);
+    void buildWallAt(QPointF position);
     QStringList waitingFor()const;
 signals:
     void changed();
